@@ -1,0 +1,22 @@
+# Scan a pull request's deployed preview and fail it on a demonstrated critical vulnerability.
+name: Shannon PR scan
+
+on:
+  pull_request: {}
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Shannon
+        uses: KeygraphHQ/shannon-action@v1
+        with:
+          url: ${{ vars.PREVIEW_URL }}
+          repo: ${{ github.workspace }}
+          fail-on-severity: critical
+          api-key: ${{ secrets.SHANNON_AI_API_KEY }}

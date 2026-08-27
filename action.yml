@@ -1,0 +1,216 @@
+name: 'Shannon AI Pentester'
+description: 'Run Shannon, the autonomous white-box AI pentester, against a target URL and repository.'
+author: 'Keygraph'
+
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  url:
+    description: 'Target URL to test (the running application).'
+    required: true
+  repo:
+    description: 'Path to the source repository to analyze (white-box). Defaults to the checked-out workspace.'
+    required: false
+    default: ${{ github.workspace }}
+  config:
+    description: 'Path to a Shannon YAML config file (auth, scope, report options).'
+    required: false
+    default: ''
+  workspace:
+    description: 'Named workspace. Determines the output directory. Defaults to the CI run id, so each run is isolated. Set a stable value to resume a scan across runs.'
+    required: false
+    default: ${{ github.run_id }}
+  model:
+    description: 'Model spec as <provider>:<model-id> (SHANNON_AI_MODEL). Defaults to anthropic:claude-sonnet-4-6.'
+    required: false
+    default: ''
+  base-url:
+    description: 'Override the provider endpoint (SHANNON_AI_BASE_URL) for a proxy/gateway.'
+    required: false
+    default: ''
+  openai-format:
+    description: 'Wire format for an OpenAI-compatible gateway (SHANNON_AI_OPENAI_FORMAT): chat-completions (default) or responses. Only applies with model=openai:... and a base-url.'
+    required: false
+    default: ''
+  api-key:
+    description: 'LLM provider API key (SHANNON_AI_API_KEY). Works for any provider named by `model` whose credential is a plain API key (including the default Anthropic model; not Bedrock).'
+    required: false
+    default: ''
+  aws-bearer-token-bedrock:
+    description: 'Amazon Bedrock bearer token (AWS_BEARER_TOKEN_BEDROCK). Required for model=amazon-bedrock:... along with aws-region.'
+    required: false
+    default: ''
+  aws-region:
+    description: 'AWS region for Amazon Bedrock (AWS_REGION). Required for model=amazon-bedrock:...'
+    required: false
+    default: ''
+  version:
+    description: 'Version of the @keygraph/shannon npm package to run.'
+    required: false
+    default: '2.6.0'
+  pipeline-testing:
+    description: 'Run with minimal prompts for fast pipeline testing.'
+    required: false
+    default: 'false'
+  fail-on-severity:
+    description: 'Fail the job if any exploited finding is at or above this severity: none (default), low, medium, high, or critical. Only exploited findings count, so this applies only to exploit-mode scans.'
+    required: false
+    default: 'none'
+  upload-sarif:
+    description: 'Upload report.sarif (when the config produces one) to GitHub code scanning. Requires the job to grant security-events: write.'
+    required: false
+    default: 'false'
+
+outputs:
+  workspace-dir:
+    description: 'Absolute path to the scan workspace directory.'
+    value: ${{ steps.scan.outputs.workspace-dir }}
+  report-pdf:
+    description: 'Path to Security-Assessment-Report.pdf, if produced.'
+    value: ${{ steps.scan.outputs.report-pdf }}
+  report-md:
+    description: 'Path to Security-Assessment-Report.md, if produced.'
+    value: ${{ steps.scan.outputs.report-md }}
+  sarif:
+    description: 'Path to report.sarif, if produced.'
+    value: ${{ steps.scan.outputs.sarif }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Enforce private repository
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+      run: |
+        if [ "$(gh api "repos/$REPO" --jq .visibility)" = "public" ]; then
+          echo "::error title=Shannon repository check::Shannon can only run on private repositories. Its report, logs, and artifacts can contain sensitive security findings about your application."
+          exit 1
+        fi
+
+    - name: Set up Node.js
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version: '22'
+
+    - name: Run Shannon
+      id: scan
+      shell: bash
+      env:
+        IN_API_KEY: ${{ inputs.api-key }}
+        IN_MODEL: ${{ inputs.model }}
+        IN_BASE_URL: ${{ inputs.base-url }}
+        IN_OPENAI_FORMAT: ${{ inputs.openai-format }}
+        IN_AWS_BEARER_TOKEN_BEDROCK: ${{ inputs.aws-bearer-token-bedrock }}
+        IN_AWS_REGION: ${{ inputs.aws-region }}
+        IN_URL: ${{ inputs.url }}
+        IN_REPO: ${{ inputs.repo }}
+        IN_CONFIG: ${{ inputs.config }}
+        IN_WORKSPACE: ${{ inputs.workspace }}
+        IN_VERSION: ${{ inputs.version }}
+        IN_PIPELINE_TESTING: ${{ inputs.pipeline-testing }}
+        IN_FAIL_ON_SEVERITY: ${{ inputs.fail-on-severity }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/scan.sh"
+
+    # Self-hosted runners persist the Docker daemon across jobs, so a canceled or failed
+    # run would orphan Shannon's worker container (the scan runs in a decoupled Temporal
+    # worker, not in the job process). if: always() runs on success, failure, AND
+    # cancellation; stop this run's worker, scoped to its workspace. No-op on GitHub-hosted
+    # runners, which are discarded after the job.
+    - name: Stop Shannon worker
+      if: always()
+      shell: bash
+      run: npx --yes "@keygraph/shannon@${{ inputs.version }}" stop "${{ inputs.workspace }}" -y 2>/dev/null || true
+
+    - name: Upload report bundle
+      id: upload_report
+      if: ${{ always() && steps.scan.outputs.workspace-dir != '' }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: shannon-report-${{ inputs.workspace }}
+        path: |
+          ${{ steps.scan.outputs.workspace-dir }}/Security-Assessment-Report.pdf
+          ${{ steps.scan.outputs.workspace-dir }}/Security-Assessment-Report.md
+          ${{ steps.scan.outputs.workspace-dir }}/report.sarif
+        if-no-files-found: warn
+
+    - name: Upload run folder
+      id: upload_run
+      if: ${{ always() && steps.scan.outputs.workspace-dir != '' }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: shannon-run-${{ inputs.workspace }}
+        path: |
+          ${{ steps.scan.outputs.workspace-dir }}/**
+          !${{ steps.scan.outputs.workspace-dir }}/.shannon/auth-state.json
+        include-hidden-files: true
+        if-no-files-found: warn
+
+    - name: Upload SARIF to code scanning
+      if: ${{ always() && inputs.upload-sarif == 'true' && steps.scan.outputs.sarif != '' }}
+      uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+      with:
+        sarif_file: ${{ steps.scan.outputs.sarif }}
+
+    - name: Publish artifact links
+      if: ${{ always() && steps.scan.outputs.workspace-dir != '' }}
+      shell: bash
+      env:
+        REPORT_NAME: shannon-report-${{ inputs.workspace }}
+        REPORT_URL: ${{ steps.upload_report.outputs.artifact-url }}
+        RUN_NAME: shannon-run-${{ inputs.workspace }}
+        RUN_URL: ${{ steps.upload_run.outputs.artifact-url }}
+        OUTCOME: ${{ steps.scan.outputs.outcome }}
+        FINDINGS_LINE: ${{ steps.scan.outputs.findings-line }}
+        NOT_ASSESSED: ${{ steps.scan.outputs.not-assessed }}
+      run: |
+        REPORT_DESC="Security Assessment Report (PDF + Markdown) + SARIF"
+        RUN_DESC="scan log, agent logs, and other run-related files (for debugging)"
+
+        # Rendered links in the job Summary.
+        if [ -n "$REPORT_URL" ] || [ -n "$RUN_URL" ]; then
+          {
+            echo ""
+            echo "### Artifacts"
+            echo ""
+            [ -n "$REPORT_URL" ] && echo "- [\`$REPORT_NAME\`]($REPORT_URL) - $REPORT_DESC"
+            [ -n "$RUN_URL" ]    && echo "- [\`$RUN_NAME\`]($RUN_URL) - $RUN_DESC"
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+        # Plain-text footer in the job log. An empty OUTCOME means scan.sh was killed before it
+        # published one — i.e. the run was cancelled or timed out mid-scan.
+        case "$OUTCOME" in
+          completed) headline="The scan completed. Your report is ready." ;;
+          partial)   headline="The scan finished, but some vulnerability classes were not assessed." ;;
+          failed)    headline="The scan did not produce a report." ;;
+          *)         headline="The scan stopped before completing (cancelled or timed out)." ;;
+        esac
+
+        echo ""
+        echo "────────────────────────────────────────────────────────────"
+        echo " Next steps"
+        echo "────────────────────────────────────────────────────────────"
+        echo " $headline"
+        if [ -n "$FINDINGS_LINE" ]; then
+          echo ""
+          echo "$FINDINGS_LINE"
+          [ -n "$NOT_ASSESSED" ] && echo " Not assessed: $NOT_ASSESSED"
+        fi
+        if [ -n "$REPORT_URL" ] || [ -n "$RUN_URL" ]; then
+          echo ""
+          echo " Download from this run:"
+          if [ -n "$REPORT_URL" ]; then
+            echo "   • $REPORT_NAME - $REPORT_DESC"
+            echo "     $REPORT_URL"
+          fi
+          if [ -n "$RUN_URL" ]; then
+            echo "   • $RUN_NAME - $RUN_DESC"
+            echo "     $RUN_URL"
+          fi
+        fi
+        echo "────────────────────────────────────────────────────────────"
+        printf '\033[90m Shannon - AI Pentester by Keygraph · https://keygraph.io\033[0m\n'

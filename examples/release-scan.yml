@@ -1,0 +1,25 @@
+# Scan the staging deployment when a release is published, and send findings to code scanning.
+name: Shannon release scan
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Shannon
+        uses: KeygraphHQ/shannon-action@v1
+        with:
+          url: ${{ vars.STAGING_URL }}
+          config: .shannon/full.yaml
+          fail-on-severity: high
+          upload-sarif: true
+          api-key: ${{ secrets.SHANNON_AI_API_KEY }}
