@@ -50,7 +50,7 @@ jobs:
 
 ### Job timeout
 
-A job gets 6 hours by default (`timeout-minutes` defaults to `360`), which is enough for Shannon.
+A job gets 6 hours by default (`timeout-minutes` defaults to `360`), which is enough for most scans. For larger repositories or slower model providers a scan can take longer than 6 hours; since GitHub-hosted runners are capped at 6 hours, a self-hosted runner is recommended for those.
 
 ## Examples
 
