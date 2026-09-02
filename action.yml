@@ -49,7 +49,7 @@ inputs:
   version:
     description: 'Version of the @keygraph/shannon npm package to run.'
     required: false
-    default: '2.6.0'
+    default: '3.0.0'
   pipeline-testing:
     description: 'Run with minimal prompts for fast pipeline testing.'
     required: false
