@@ -126,6 +126,14 @@ findings_line() {
 }
 
 main() {
+  # The version becomes part of an npm package spec handed to npx. npm accepts
+  # tarball and git URLs in that position, so accept release versions only and
+  # fail closed on anything else.
+  if ! [[ "${IN_VERSION:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+    echo "::error title=Shannon config error::Invalid version '${IN_VERSION:-}' (expected a release version like 3.0.0)."
+    exit 1
+  fi
+
   export_credentials
 
   # Published up front so the workspace upload works even when the scan fails.
