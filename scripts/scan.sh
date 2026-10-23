@@ -10,6 +10,16 @@
 # No -e: the scan's exit code is captured and classified, so a failed scan must not abort the script.
 set -uo pipefail
 
+# The workspace input names a directory under ~/.shannon/workspaces and the run
+# folder is uploaded as an artifact later. Keep it a single plain path component
+# so it cannot escape that root.
+case "${IN_WORKSPACE:-}" in
+  ''|.|..|*/*|*\\*|*[!A-Za-z0-9._-]*)
+    echo "::error title=Shannon config error::Invalid workspace '${IN_WORKSPACE:-}' (use a single name: letters, digits, dash, underscore, dot)."
+    exit 1
+    ;;
+esac
+
 # In npx mode the workspace lives under ~/.shannon/workspaces/<name>.
 WS_DIR="$HOME/.shannon/workspaces/$IN_WORKSPACE"
 REPORT_JSON="$WS_DIR/.shannon/deliverables/report.json"
